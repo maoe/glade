@@ -157,9 +157,14 @@ register :: PackageDescription -> LocalBuildInfo
 register pkg@(library       -> Just lib )
          lbi@(libraryConfig -> Just clbi) regFlags
   = do
-
+    absPackageDbs <- absolutePackageDBPaths packageDbs
     installedPkgInfoRaw <- generateRegistrationInfo
-                           verbosity pkg lib lbi clbi inplace distPref
+#if CABAL_VERSION_CHECK(1, 22, 0)
+                           verbosity pkg lib lbi clbi inplace reloc distPref
+                           (registrationPackageDB absPackageDbs)
+#else
+                           verbosity pkg lib lbi clbi inplate distPref
+#endif
 
     dllsInScope <- getSearchPath >>= (filterM doesDirectoryExist) >>= getDlls
     let libs = fixLibs dllsInScope (extraLibraries installedPkgInfoRaw)
@@ -182,6 +187,7 @@ register pkg@(library       -> Just lib )
     modeGenerateRegFile = isJust (flagToMaybe (regGenPkgConf regFlags))
     modeGenerateRegScript = fromFlag (regGenScript regFlags)
     inplace   = fromFlag (regInPlace regFlags)
+    reloc     = LBI.relocatable lbi
     packageDbs = nub $ withPackageDB lbi
                     ++ maybeToList (flagToMaybe  (regPackageDB regFlags))
     packageDb = registrationPackageDB packageDbs
@@ -398,15 +404,10 @@ fixDeps pd@PD.PackageDescription {
   let modDeps = zipWith (ModDep True []) expMods mExpFiles++
                 zipWith (ModDep False []) othMods mOthFiles
   modDeps <- mapM extractDeps modDeps
-  let (expMods, othMods) = span mdExposed $ sortTopological modDeps
-      badOther = map (fromMaybe "<no file>" . mdLocation) $
-                 filter (not . mdExposed) expMods
-  unless (null badOther) $
-    die ("internal chs modules "++intercalate "," badOther++
-         " depend on exposed chs modules; cabal needs to build internal modules first")
+  let (othMods, expMods) = span (not . mdExposed) $ reverse $ sortTopological modDeps
   return pd { PD.library = Just lib {
-    PD.exposedModules = map mdOriginal expMods,
-    PD.libBuildInfo = bi { PD.otherModules = map mdOriginal othMods }
+    PD.exposedModules = map mdOriginal (reverse expMods),
+    PD.libBuildInfo = bi { PD.otherModules = map mdOriginal (reverse othMods) }
   }}
 
 data ModDep = ModDep {
